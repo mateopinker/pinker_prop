@@ -106,9 +106,13 @@ def interp_s8025_polar(Re):
     return (a3 + t*(a4 - a3),cl3 + t*(cl4 - cl3),cd3 + t*(cd4 - cd3))
 
 
-def polarpicker(top_bracket, bottom_bracket,dT_list, v_relative_module,exit_step,outer_d, hub_d, sections,rho=1.225,nu=1.46e-5):
+def polarpicker(top_bracket, bottom_bracket,dT_list, v_relative_module,v_relative_angle,exit_step,outer_d, hub_d, sections,rho=1.225,nu=1.46e-5):
         """
         Chord and AoA distribution calculation.
+        I compute dT=dLcos(phi) - dDsin(phi) and
+        dL =  0.5 * rho *V_rel**2 * chord * Cl *dr
+        dD = 0.5 * rho *V_rel**2 * chord * Cd * dr
+        I use the bisection method to find the chord that satisfies the equation for each element
         """
         
         thrust = []
@@ -133,6 +137,8 @@ def polarpicker(top_bracket, bottom_bracket,dT_list, v_relative_module,exit_step
         while n != sections:
             dT = dT_list[n]
             V_rel = v_relative_module[n]
+            V_angle = v_relative_angle[n]
+            
             
 
             Re_low = bottom_bracket * V_rel/ nu
@@ -143,10 +149,11 @@ def polarpicker(top_bracket, bottom_bracket,dT_list, v_relative_module,exit_step
             a_high, Cl_high, Cd_high = interp_s8025_polar(Re_high)
             a_mid, Cl_mid, Cd_mid = interp_s8025_polar(Re_mid)
 
-            dT_low = 0.5 * rho * V_rel**2 * bottom_bracket * Cl_low * dr
-            dT_high = 0.5 * rho * V_rel**2 * top_bracket * Cl_high * dr
-            dT_mid = 0.5 * rho * V_rel**2 * mid_bracket * Cl_mid * dr
 
+
+            dT_low = 0.5 * rho * V_rel**2 * bottom_bracket * Cl_low * dr*math.cos(V_angle) - 0.5 * rho * V_rel**2 * bottom_bracket * Cd_low * dr*math.sin(V_angle)
+            dT_high = 0.5 * rho * V_rel**2 * top_bracket * Cl_high * dr*math.cos(V_angle) - 0.5 * rho * V_rel**2 * top_bracket * Cd_high * dr*math.sin(V_angle)
+            dT_mid = 0.5 * rho * V_rel**2 * mid_bracket * Cl_mid * dr*math.cos(V_angle) - 0.5 * rho * V_rel**2 * mid_bracket * Cd_mid * dr*math.sin(V_angle)
         
 
             if (dT - dT_low) * (dT - dT_mid) < 0: #Lower bracket has root
@@ -208,8 +215,8 @@ def geometric_pitch_distribution(v_relative_angle, AoA):
 ##INPUTS##
 ##########
 
-outer_d = 0.07 #diameter of prop [m]
-mass = 1.5 #mass of quad [kg]
+outer_d = 0.13 #diameter of prop [m]
+mass = 0.5 #mass of quad [kg]
 hub_d = 0.01 #hub diameter [m]
 blades = 2 #number of blades
 sections = 10 #number of radial sections we discretize the blade into
@@ -235,7 +242,7 @@ v_relative_module, v_relative_angle = relative_velocity(motor_rpm, outer_d, hub_
 print("Relative velocity magnitudes (m/s):", v_relative_module)
 print("Relative flow angles phi (rad):", v_relative_angle)
 
-chords, AoA, Reynolds, thrust, drag, drag_tot = polarpicker(top_bracket, bottom_bracket, dT_list, v_relative_module, exit_step, outer_d, hub_d, sections)
+chords, AoA, Reynolds, thrust, drag, drag_tot = polarpicker(top_bracket, bottom_bracket, dT_list, v_relative_module, v_relative_angle, exit_step, outer_d, hub_d, sections)
 print("Chord distribution (m):", chords)
 print("Angle of attack distribution (deg):", AoA)
 print("Reynolds distribution:", Reynolds)
