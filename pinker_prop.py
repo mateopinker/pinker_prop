@@ -22,11 +22,10 @@ def inflow(outer_d, total_mass_kg, rho=1.225, g=9.81):
 def thrust_distribution(outer_d, hub_d, F_prop, n_blades, sections, distribution="uniform"):
     """
     Thrust distribution discretized into 'sections' radial elements.
-    Uses a while loop (consistent with relative_velocity).
 
     Supported distributions:
         "uniform" : constant dT/dr along the span
-        "ramp"    : linearly increasing dT/dr from root minimum to tip maximum
+        "ramp"    : linearly increasing dT/dr from shaft axis minimum to tip maximum
 
     Numeric selectors are also accepted:
         0 -> "uniform"
@@ -62,14 +61,14 @@ def thrust_distribution(outer_d, hub_d, F_prop, n_blades, sections, distribution
             n = n + 1
 
     elif distribution == "ramp":
-        # dT/dr grows linearly from zero at the root to a maximum at the tip.
-        # The slope is normalized so the summed section thrust equals F_blade.
-        slope = 2 * F_blade / span**2 # [N/m^2]
+        # dT/dr grows linearly with absolute radius, referenced to the shaft axis.
+        # This makes the theoretical minimum occur at r = 0, not at the blade root.
+        slope = 2 * F_blade / (outer_r**2 - root_r**2) # [N/m^2]
 
         while n != sections:
-            x_inner = dr * n
-            x_outer = dr * (n + 1)
-            dT = 0.5 * slope * (x_outer**2 - x_inner**2)
+            r_inner = root_r + dr * n
+            r_outer = root_r + dr * (n + 1)
+            dT = 0.5 * slope * (r_outer**2 - r_inner**2)
             dT_list.append(dT)
             n = n + 1
 
@@ -249,10 +248,10 @@ def geometric_pitch_distribution(v_relative_angle, AoA):
 
 outer_d = 0.1 #diameter of prop [m]
 mass = 0.13 #mass of quad [kg]
-hub_d = 0.01 #hub diameter [m]
+hub_d = 0.07 #hub diameter [m]
 blades = 2 #number of blades
 sections = 10 #number of radial sections we discretize the blade into
-motor_rpm = 4000 #motor speed [rpm]
+motor_rpm = 5000 #motor speed [rpm]
 bottom_bracket = 0.00001 #min chord [m]
 top_bracket = 1 #max chord [m]
 exit_step = 0.001 #step size for exit condition in solver as percentage of chord [%]
