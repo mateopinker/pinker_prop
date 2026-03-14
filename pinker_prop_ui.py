@@ -19,7 +19,9 @@ DEFAULT_INPUT_NAMES = (
     "top_bracket",
     "exit_step",
     "y",
+    "airfoil",
 )
+STATIC_NAMESPACE_NAMES = ("AIRFOIL_POLARS",)
 
 
 def load_physics_namespace():
@@ -34,7 +36,9 @@ def load_physics_namespace():
 
         if isinstance(node, ast.Assign):
             target = node.targets[0] if len(node.targets) == 1 else None
-            if isinstance(target, ast.Name) and target.id in DEFAULT_INPUT_NAMES:
+            if isinstance(target, ast.Name) and (
+                target.id in DEFAULT_INPUT_NAMES or target.id in STATIC_NAMESPACE_NAMES
+            ):
                 filtered_body.append(node)
 
     module = ast.Module(body=filtered_body, type_ignores=[])
@@ -51,9 +55,14 @@ def distribution_to_ui_value(raw_value):
     return "uniform"
 
 
+def format_airfoil_label(airfoil):
+    return airfoil.upper()
+
+
 def build_default_inputs(namespace):
     defaults = {name: namespace.get(name) for name in DEFAULT_INPUT_NAMES}
     defaults["y"] = distribution_to_ui_value(defaults.get("y"))
+    defaults["airfoil"] = defaults.get("airfoil", "s8025")
     return defaults
 
 
@@ -86,6 +95,7 @@ def calculate_results(namespace, params):
             params["outer_d"],
             params["hub_d"],
             params["sections"],
+            airfoil=params["airfoil"],
         )
         geo_pitch = namespace["geometric_pitch_distribution"](v_relative_angle, aoa)
 
@@ -196,15 +206,18 @@ class PinkerPropUI:
 
         self.namespace = load_physics_namespace()
         self.defaults = build_default_inputs(self.namespace)
+        self.available_airfoils = self.namespace["list_available_airfoils"]()
         self.input_vars = {}
         self.input_field_refs = {}
         self.summary_vars = {}
         self.meta_vars = {
             "distribution": tk.StringVar(value="Distribution: -"),
+            "airfoil": tk.StringVar(value="Airfoil: -"),
             "layout": tk.StringVar(value="Blades: - | Sections: -"),
         }
         self.status_detail_var = tk.StringVar(value="Ready.")
         self.distribution_buttons = {}
+        self.airfoil_buttons = {}
 
         self._configure_styles()
         self._build_layout()
@@ -275,7 +288,7 @@ class PinkerPropUI:
         sidebar.grid(row=0, column=0, sticky="nsew")
         sidebar.grid_propagate(False)
         sidebar.grid_columnconfigure(0, weight=1)
-        sidebar.grid_rowconfigure(5, weight=1)
+        sidebar.grid_rowconfigure(6, weight=1)
 
         content = tk.Frame(shell, bg=PALETTE["app_bg"])
         content.grid(row=0, column=1, sticky="nsew", padx=(24, 0))
@@ -327,12 +340,16 @@ class PinkerPropUI:
             card.grid(row=row_index, column=0, sticky="ew", pady=(18 if row_index == 1 else 12, 0))
             self._build_field_group(card, title, description, fields)
 
+        airfoil_card = self._create_sidebar_card(parent)
+        airfoil_card.grid(row=4, column=0, sticky="ew", pady=(12, 0))
+        self._build_airfoil_group(airfoil_card)
+
         profile_card = self._create_sidebar_card(parent)
-        profile_card.grid(row=4, column=0, sticky="ew", pady=(12, 0))
+        profile_card.grid(row=5, column=0, sticky="ew", pady=(12, 0))
         self._build_distribution_group(profile_card)
 
         footer = self._create_sidebar_card(parent)
-        footer.grid(row=6, column=0, sticky="sew", pady=(12, 0))
+        footer.grid(row=7, column=0, sticky="sew", pady=(12, 0))
         tk.Label(
             footer,
             text="Status",
@@ -408,6 +425,13 @@ class PinkerPropUI:
             fg=PALETTE["ink"],
         )
         self.meta_distribution_label.pack(side="left", padx=(10, 0))
+        self.meta_airfoil_label = self._make_pill(
+            meta_row,
+            textvariable=self.meta_vars["airfoil"],
+            bg=PALETTE["surface_alt"],
+            fg=PALETTE["ink"],
+        )
+        self.meta_airfoil_label.pack(side="left", padx=(10, 0))
         self.meta_layout_label = self._make_pill(
             meta_row,
             textvariable=self.meta_vars["layout"],
@@ -814,6 +838,56 @@ class PinkerPropUI:
             button.grid(row=0, column=column, sticky="ew", padx=(0 if column == 0 else 6, 0))
             self.distribution_buttons[mode] = button
 
+    def _build_airfoil_group(self, parent):
+        tk.Label(
+            parent,
+            text="Airfoil",
+            font=(FONT_FAMILY, 11, "bold"),
+            fg=PALETTE["surface"],
+            bg=PALETTE["sidebar_panel"],
+        ).pack(anchor="w")
+        tk.Label(
+            parent,
+            text="Choose one airfoil dataset for the whole blade span.",
+            font=(FONT_FAMILY, 9),
+            fg=PALETTE["muted_light"],
+            bg=PALETTE["sidebar_panel"],
+            justify="left",
+            wraplength=360,
+        ).pack(anchor="w", pady=(4, 12))
+
+        toggle = tk.Frame(parent, bg=PALETTE["sidebar_surface"], padx=4, pady=4)
+        toggle.pack(fill="x")
+
+        columns = 2
+        for column in range(columns):
+            toggle.grid_columnconfigure(column, weight=1)
+
+        self.airfoil_var = tk.StringVar(value=self.defaults["airfoil"])
+        for index, airfoil in enumerate(self.available_airfoils):
+            row = index // columns
+            column = index % columns
+            button = tk.Button(
+                toggle,
+                text=format_airfoil_label(airfoil),
+                command=lambda selected=airfoil: self._set_airfoil(selected),
+                relief="flat",
+                borderwidth=0,
+                highlightthickness=0,
+                cursor="hand2",
+                font=(FONT_FAMILY, 10, "bold"),
+                padx=14,
+                pady=10,
+            )
+            button.grid(
+                row=row,
+                column=column,
+                sticky="ew",
+                padx=(0 if column == 0 else 6, 0),
+                pady=(0 if row == 0 else 6, 0),
+            )
+            self.airfoil_buttons[airfoil] = button
+
     def _make_pill(self, parent, text=None, textvariable=None, bg=None, fg=None):
         label = tk.Label(
             parent,
@@ -903,6 +977,24 @@ class PinkerPropUI:
         if refs["unit"] is not None:
             refs["unit"].configure(fg=label_fg)
 
+    def _set_airfoil(self, airfoil):
+        self.airfoil_var.set(airfoil)
+        for name, button in self.airfoil_buttons.items():
+            if name == airfoil:
+                button.configure(
+                    bg=PALETTE["accent"],
+                    fg=PALETTE["surface"],
+                    activebackground=PALETTE["accent_dark"],
+                    activeforeground=PALETTE["surface"],
+                )
+            else:
+                button.configure(
+                    bg=PALETTE["sidebar_surface"],
+                    fg=PALETTE["muted_light"],
+                    activebackground=PALETTE["sidebar_surface"],
+                    activeforeground=PALETTE["surface"],
+                )
+
     def _set_distribution(self, mode):
         self.distribution_var.set(mode)
         for name, button in self.distribution_buttons.items():
@@ -942,10 +1034,16 @@ class PinkerPropUI:
     def _refresh_meta(self, params=None):
         if params is None:
             self.meta_vars["distribution"].set(f"Distribution: {self.distribution_var.get().title()}")
+            self.meta_vars["airfoil"].set(
+                f"Airfoil: {format_airfoil_label(self.airfoil_var.get())}"
+            )
             blades = self.input_vars["blades"].get() or "-"
             sections = self.input_vars["sections"].get() or "-"
         else:
             self.meta_vars["distribution"].set(f"Distribution: {params['distribution'].title()}")
+            self.meta_vars["airfoil"].set(
+                f"Airfoil: {format_airfoil_label(params['airfoil'])}"
+            )
             blades = params["blades"]
             sections = params["sections"]
         self.meta_vars["layout"].set(f"Blades: {blades} | Sections: {sections}")
@@ -954,6 +1052,9 @@ class PinkerPropUI:
         for key, value in self.defaults.items():
             if key == "y":
                 self._set_distribution(value)
+                continue
+            if key == "airfoil":
+                self._set_airfoil(value)
                 continue
             self.input_vars[key].set(str(value))
         self._refresh_meta()
@@ -972,6 +1073,7 @@ class PinkerPropUI:
                 "top_bracket": float(self.input_vars["top_bracket"].get()),
                 "exit_step": float(self.input_vars["exit_step"].get()),
                 "distribution": self.distribution_var.get(),
+                "airfoil": self.airfoil_var.get(),
             }
         except ValueError as exc:
             raise ValueError("All inputs must contain valid numbers.") from exc
@@ -990,6 +1092,11 @@ class PinkerPropUI:
             raise ValueError("Exit step must be greater than zero.")
         if params["distribution"] not in {"uniform", "ramp"}:
             raise ValueError("Distribution must be uniform or ramp.")
+        if params["airfoil"] not in self.available_airfoils:
+            raise ValueError(
+                "Airfoil must be one of: "
+                + ", ".join(format_airfoil_label(name) for name in self.available_airfoils)
+            )
 
         return params
 
@@ -1018,7 +1125,7 @@ class PinkerPropUI:
                 values=(
                     index + 1,
                     f"{results['radius_stations'][index]:.4f}",
-                    f"{results['dT_list'][index]:.5f}",
+                    f"{results['thrust'][index]:.5f}",
                     f"{results['v_relative_module'][index]:.3f}",
                     f"{math.degrees(results['v_relative_angle'][index]):.2f}",
                     f"{results['chords'][index]:.5f}",

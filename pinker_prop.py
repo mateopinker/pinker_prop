@@ -1,5 +1,56 @@
 import math
 
+AIRFOIL_POLARS = {
+    "s8025": (
+        (50000, 5.75, 0.6472, 0.02431),
+        (100000, 6.25, 0.7023, 0.01889),
+        (200000, 6.50, 0.7340, 0.01501),
+        (500000, 7.00, 0.7928, 0.01217),
+        (1000000, 6.75, 0.7713, 0.00989),
+    ),
+
+    "a18": (
+        (40400, 6.98, 1.002, 0.0346),
+        (61300, 7.55, 1.049, 0.0268),
+        (101700, 7.54, 1.014, 0.0264),
+        (203800, 7.44, 1.033, 0.0215),
+        (303300, 9.25, 1.138, 0.0260),
+    ),
+
+    "naca0012": (
+        (10000, 6.5625, 0.4, 0.08),
+        (20000, 8.75, 0.5, 0.13),
+        (30000, 7.5, 0.6, 0.08),
+        (50000, 8.125, 0.675, 0.05),
+        (60000, 7.5, 0.7, 0.04),
+        (100000, 7.5, 0.72, 0.037)
+    ),
+    # Add more airfoils here with the same point format:
+    # "airfoil_name": ((Re, alpha_opt_deg, Cl_opt, Cd_opt), ...),
+}
+
+
+def normalize_airfoil_name(airfoil):
+    """
+    Normalizes the airfoil selector and validates it against the loaded data.
+    """
+    airfoil_key = airfoil.strip().lower()
+
+    if airfoil_key not in AIRFOIL_POLARS:
+        raise ValueError(
+            "airfoil must be one of: " + ", ".join(list_available_airfoils())
+        )
+
+    return airfoil_key
+
+
+def list_available_airfoils():
+    """
+    Returns the airfoils that have polar data available in this script.
+    """
+    return tuple(sorted(AIRFOIL_POLARS.keys()))
+
+
 def inflow(outer_d, total_mass_kg, rho=1.225, g=9.81):
     """
     Computes inflow V_p for a quadrotor in hover
@@ -102,48 +153,132 @@ def relative_velocity(motor_rpm,outer_d,hub_d,sections,Vp):
 
     return v_relative_module, v_relative_angle
 
-def interp_s8025_polar(Re):
+def interp_airfoil_polar(Re, airfoil="s8025"):
     """
-    Linear interpolation of the polars for the S8025 airfoil.
+    Linear interpolation of the polars for the selected airfoil.
     For a given reynolds returns optimal angle of attack (deg),
     lift coefficient, and drag coefficient. (alpha_opt_deg, Cl_opt, Cd_opt
     NO EXTRAPOLATION BEYOND DATA RANGE.
     """
+    airfoil_key = normalize_airfoil_name(airfoil)
+    polar_points = AIRFOIL_POLARS[airfoil_key]
 
-    Re0, a0, cl0, cd0 = 50000,  5.75, 0.6472, 0.02431
-    Re1, a1, cl1, cd1 = 100000,  6.25, 0.7023, 0.01889
-    Re2, a2, cl2, cd2 = 200000,  6.50, 0.7340, 0.01501
-    Re3, a3, cl3, cd3 = 500000,  7.00, 0.7928, 0.01217
-    Re4, a4, cl4, cd4 = 1000000,  6.75, 0.7713, 0.00989
+    Re0, a0, cl0, cd0 = polar_points[0]
+    ReN, aN, clN, cdN = polar_points[-1]
+
     # I clamp data range (no extrapolation)
     if Re <= Re0:
         return a0, cl0, cd0
-    if Re >= Re4:
-        return a4, cl4, cd4
+    if Re >= ReN:
+        return aN, clN, cdN
 
-    if Re <= Re1:
-        t = (Re - Re0) / (Re1 - Re0)
-        return (a0 + t*(a1 - a0),cl0 + t*(cl1 - cl0),cd0 + t*(cd1 - cd0))
+    n = 0
 
-    if Re <= Re2:
-        t = (Re - Re1) / (Re2 - Re1)
-        return (a1 + t*(a2 - a1),cl1 + t*(cl2 - cl1), cd1 + t*(cd2 - cd1))
+    while n != len(polar_points) - 1:
+        Re_low, a_low, cl_low, cd_low = polar_points[n]
+        Re_high, a_high, cl_high, cd_high = polar_points[n + 1]
 
-    if Re <= Re3:
-        t = (Re - Re2) / (Re3 - Re2)
-        return (a2 + t*(a3 - a2),cl2 + t*(cl3 - cl2),cd2 + t*(cd3 - cd2))
+        if Re <= Re_high:
+            t = (Re - Re_low) / (Re_high - Re_low)
+            return (
+                a_low + t * (a_high - a_low),
+                cl_low + t * (cl_high - cl_low),
+                cd_low + t * (cd_high - cd_low),
+            )
 
-    t = (Re - Re3) / (Re4 - Re3)
-    return (a3 + t*(a4 - a3),cl3 + t*(cl4 - cl3),cd3 + t*(cd4 - cd3))
+        n = n + 1
+
+    return aN, clN, cdN
 
 
-def polarpicker(top_bracket, bottom_bracket,dT_list, v_relative_module,v_relative_angle,exit_step,outer_d, hub_d, sections,rho=1.225,nu=1.46e-5):
+def interp_s8025_polar(Re):
+    """
+    Compatibility wrapper for existing code paths that still call S8025 directly.
+    """
+    return interp_airfoil_polar(Re, "s8025")
+
+
+def section_forces(chord, V_rel, V_angle, dr, rho=1.225,nu=1.46e-5, airfoil="s8025"):
+        """
+        Local aerodynamic solution for one blade element at a given chord.
+        """
+        Re = chord * V_rel/ nu
+        AoA, Cl, Cd = interp_airfoil_polar(Re, airfoil)
+        dT = 0.5 * rho * V_rel**2 * chord * Cl * dr*math.cos(V_angle) - 0.5 * rho * V_rel**2 * chord * Cd * dr*math.sin(V_angle)
+        dD = 0.5 * rho * V_rel**2 * chord * Cd * dr
+
+        return AoA, Cl, Cd, Re, dT, dD
+
+
+def redistribute_missing_thrust(top_bracket,dT_list, v_relative_module,v_relative_angle,outer_d, hub_d, sections,rho=1.225,nu=1.46e-5, airfoil="s8025"):
+        """
+        If an element needs more than the available thrust at max chord,
+        I cap that element at top_bracket and redistribute the missing thrust
+        among the remaining free elements, preserving their current relative loading.
+        """
+        redistributed_dT = []
+        capped = []
+
+        n = 0
+        while n != sections:
+            redistributed_dT.append(dT_list[n])
+            capped.append(False)
+            n = n + 1
+
+        outer_r = outer_d / 2
+        root_r  = hub_d / 2
+        span = outer_r - root_r
+        dr = span / sections
+
+        while True:
+            missing_thrust = 0
+            n = 0
+
+            while n != sections:
+                if capped[n] == False:
+                    V_rel = v_relative_module[n]
+                    V_angle = v_relative_angle[n]
+                    AoA_high, Cl_high, Cd_high, Re_high, dT_high, dD_high = section_forces(top_bracket, V_rel, V_angle, dr, rho, nu, airfoil)
+
+                    if redistributed_dT[n] > dT_high:
+                        print("Element", n + 1, "hit max chord:", top_bracket, "m. Missing thrust:", redistributed_dT[n] - dT_high, "N")
+                        missing_thrust = missing_thrust + redistributed_dT[n] - dT_high
+                        redistributed_dT[n] = dT_high
+                        capped[n] = True
+
+                n = n + 1
+
+            if missing_thrust == 0:
+                break
+
+            free_thrust = 0
+            n = 0
+
+            while n != sections:
+                if capped[n] == False:
+                    free_thrust = free_thrust + redistributed_dT[n]
+                n = n + 1
+
+            if free_thrust == 0:
+                raise ValueError("max chord is too small to meet the required thrust")
+
+            n = 0
+            while n != sections:
+                if capped[n] == False:
+                    redistributed_dT[n] = redistributed_dT[n] + missing_thrust * redistributed_dT[n] / free_thrust
+                n = n + 1
+
+        return redistributed_dT, capped
+
+
+def polarpicker(top_bracket, bottom_bracket,dT_list, v_relative_module,v_relative_angle,exit_step,outer_d, hub_d, sections,rho=1.225,nu=1.46e-5, airfoil="s8025"):
         """
         Chord and AoA distribution calculation.
         I compute dT=dLcos(phi) - dDsin(phi) and
         dL =  0.5 * rho *V_rel**2 * chord * Cl *dr
         dD = 0.5 * rho *V_rel**2 * chord * Cd * dr
         I use the bisection method to find the chord that satisfies the equation for each element
+        If an element exceeds the max chord, I cap it and redistribute its missing thrust.
         """
         
         thrust = []
@@ -162,13 +297,26 @@ def polarpicker(top_bracket, bottom_bracket,dT_list, v_relative_module,v_relativ
         span = outer_r - root_r
         dr = span / sections
 
+        redistributed_dT, capped = redistribute_missing_thrust(top_bracket,dT_list, v_relative_module,v_relative_angle,outer_d, hub_d, sections,rho,nu, airfoil)
 
 
 
         while n != sections:
-            dT = dT_list[n]
+            dT = redistributed_dT[n]
             V_rel = v_relative_module[n]
             V_angle = v_relative_angle[n]
+
+            if capped[n] == True:
+                a_high, Cl_high, Cd_high, Re_high, dT_high, dD_high = section_forces(top_bracket, V_rel, V_angle, dr, rho, nu, airfoil)
+                thrust.append(dT_high)
+                AoA.append(a_high)
+                chords.append(top_bracket)
+                drag.append(dD_high)
+                Reynolds.append(Re_high)
+                n = n + 1
+                print("Element", n, "capped, chord:", top_bracket, "m, AoA:", a_high, "deg, dT:", dT_high, "N")
+                drag_tot = sum(drag)
+                continue
             
             
 
@@ -176,9 +324,9 @@ def polarpicker(top_bracket, bottom_bracket,dT_list, v_relative_module,v_relativ
             Re_high = top_bracket * V_rel/ nu
             Re_mid = mid_bracket * V_rel/ nu
 
-            a_low, Cl_low, Cd_low = interp_s8025_polar(Re_low)
-            a_high, Cl_high, Cd_high = interp_s8025_polar(Re_high)
-            a_mid, Cl_mid, Cd_mid = interp_s8025_polar(Re_mid)
+            a_low, Cl_low, Cd_low = interp_airfoil_polar(Re_low, airfoil)
+            a_high, Cl_high, Cd_high = interp_airfoil_polar(Re_high, airfoil)
+            a_mid, Cl_mid, Cd_mid = interp_airfoil_polar(Re_mid, airfoil)
 
 
 
@@ -256,6 +404,7 @@ bottom_bracket = 0.00001 #min chord [m]
 top_bracket = 1 #max chord [m]
 exit_step = 0.001 #step size for exit condition in solver as percentage of chord [%]
 y = 1 # thrust distribution: "uniform", "ramp", 0, or 1
+airfoil = "s8025" # airfoil name used for the whole blade
 
 
 
@@ -267,6 +416,7 @@ print("Thrust per motor:", F_prop, "N")
 F_blade, dT_list = thrust_distribution(outer_d, hub_d, F_prop, blades, sections, y)
 print("Thrust per blade:", F_blade, "N")
 print("Thrust distribution mode:", y)
+print("Airfoil:", airfoil)
 print("Element thrusts:", dT_list)
 print("Sum check:", sum(dT_list), "N")
 
@@ -276,7 +426,7 @@ v_relative_module, v_relative_angle = relative_velocity(motor_rpm, outer_d, hub_
 print("Relative velocity magnitudes (m/s):", v_relative_module)
 print("Relative flow angles phi (rad):", v_relative_angle)
 
-chords, AoA, Reynolds, thrust, drag, drag_tot = polarpicker(top_bracket, bottom_bracket, dT_list, v_relative_module, v_relative_angle, exit_step, outer_d, hub_d, sections)
+chords, AoA, Reynolds, thrust, drag, drag_tot = polarpicker(top_bracket, bottom_bracket, dT_list, v_relative_module, v_relative_angle, exit_step, outer_d, hub_d, sections, airfoil=airfoil)
 print("Chord distribution (m):", chords)
 print("Angle of attack distribution (deg):", AoA)
 print("Reynolds distribution:", Reynolds)
