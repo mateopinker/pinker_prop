@@ -40,7 +40,3 @@ This is a first-pass design tool, not a final propeller design environment. Pres
 - sectional 2D polar behavior
 - no induced-angle correction
 - no structural or aeroelastic model
-
-Suggested repository description:
-
-`Hover propeller sizing with actuator disk theory and blade element theory in Python.`
